@@ -1,4 +1,3 @@
-from tkinter import scrolledtext
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QTextEdit, QPushButton, QFileDialog, QMessageBox, QProgressBar, QComboBox
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import sys
@@ -8,7 +7,7 @@ import subprocess
 import openai
 
 # Configura correctamente tu clave de API
-openai.api_key = "MI_CLAVE_API"
+openai.api_key = "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"
 
 class DownloadThread(QThread):
     # Señales para actualizar la barra de progreso y mostrar mensaje de finalización
@@ -25,8 +24,8 @@ class DownloadThread(QThread):
     def run(self):
         """Maneja la descarga según la plataforma seleccionada (YouTube o Spotify)."""
         try:
+            # Extraemos el nombre del archivo basado en el título del video (para youtube)
             if self.platform == 'youtube':
-                # Configuramos opciones para yt-dlp con el formato elegido
                 options = {
                     'format': 'bestaudio/best',
                     'outtmpl': os.path.join(self.path, "%(title)s.%(ext)s"),
@@ -39,11 +38,26 @@ class DownloadThread(QThread):
                     'noplaylist': True
                 }
                 with yt_dlp.YoutubeDL(options) as ydl:
+                    info_dict = ydl.extract_info(self.url, download=False)
+                    filename = ydl.prepare_filename(info_dict)
+                    filename = filename.replace(info_dict['ext'], self.file_format)  # Usamos el formato de salida
+
+                    if os.path.exists(filename):
+                        self.finished_signal.emit(f"El archivo '{filename}' ya existe. No se descargará nuevamente.")
+                        return
+                    
                     ydl.download([self.url])
 
             elif self.platform == 'spotify':
+                # Usamos el comando spotdl para descargar música de Spotify
                 command = ["spotdl", "download", self.url, "--output", self.path]
                 result = subprocess.run(command, capture_output=True, text=True)
+
+                # Revisamos si el archivo ya existe en el directorio de destino
+                filename = os.path.join(self.path, self.url.split('/')[-1] + ".mp3")  # Aquí podrías personalizar el nombre
+                if os.path.exists(filename):
+                    self.finished_signal.emit(f"El archivo '{filename}' ya existe. No se descargará nuevamente.")
+                    return
 
                 if result.returncode != 0:
                     raise Exception(result.stderr)
@@ -119,17 +133,25 @@ class DownloaderApp(QWidget):
         return None
 
     def procesar_input(self):
-        """Procesa la entrada del usuario para determinar si es un enlace de descarga o consulta para ChatGPT."""
+        """Procesa las entradas de texto, manejando cada línea como una consulta o enlace independiente."""
         texto = self.input_entry.toPlainText().strip()
         if not texto:
-            self.show_message("Advertencia", "Por favor, ingresa un mensaje o enlace.", error=True)
+            self.show_message("Advertencia", "Por favor, ingresa uno o más mensajes o enlaces.", error=True)
             return
 
-        plataforma = self.detectar_plataforma(texto)
-        if plataforma:
-            self.iniciar_descarga(texto, plataforma)
-        else:
-            self.usar_chatgpt(texto)
+        # Dividimos el texto por líneas
+        lineas = texto.split("\n")
+        
+        for linea in lineas:
+            linea = linea.strip()
+            if not linea:
+                continue  # Si la línea está vacía, la saltamos
+
+            plataforma = self.detectar_plataforma(linea)
+            if plataforma:
+                self.iniciar_descarga(linea, plataforma)  # Iniciar la descarga para esta línea
+            else:
+                self.usar_chatgpt(linea)  # Enviar la consulta a ChatGPT para esta línea
 
     def iniciar_descarga(self, url, plataforma):
         """Inicia el proceso de descarga según la plataforma seleccionada."""
@@ -150,11 +172,13 @@ class DownloaderApp(QWidget):
     def usar_chatgpt(self, prompt):
         """Envía una consulta a ChatGPT y muestra la respuesta en un cuadro de mensaje."""
         try:
-            response = openai.Completion.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}]
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",  # Asegúrate de usar el modelo correcto
+                messages=[{"role": "user", "content": prompt}]  # Consulta del usuario
             )
-            self.show_message("ChatGPT", response.choices[0].message.content)
+            message = response['choices'][0]['message']['content']  # Accede correctamente a la respuesta
+            self.show_message("ChatGPT", message)
+    
         except Exception as e:
             self.show_message("Error", f"Error al comunicarse con ChatGPT: {str(e)}", error=True)
 
@@ -181,4 +205,5 @@ if __name__ == '__main__':
     window = DownloaderApp()
     window.show()
     sys.exit(app.exec())
+
 
